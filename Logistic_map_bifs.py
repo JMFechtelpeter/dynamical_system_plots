@@ -1,7 +1,5 @@
 import numpy as np
 from numba import njit
-from math import pi
-import pickle
 
 # Block 1: Definition of Numba-optimized functions
 # These functions are optimized for performance using Numba's JIT compilation.
@@ -48,13 +46,13 @@ def uni(arr):
 # Block 2: Main function 'main'
 # This is the core of the script, where the bifurcation analysis is performed.
 def main():
-    map_function = mod_rsinpix_map
+    map_function = mod_logistic_map
     N = 7 # Number of bifurcation points
     T = 2**25 # Total iterations
     L = 2**5 # Iterations to save
     B = 10  # Number of r values to search in every iteration
-    LB = 0.82   # Absolute lower bound of r
-    UB = 1    # Absolute upper bound of r
+    LB = 3.44   # Absolute lower bound of r
+    UB = 3.57    # Absolute upper bound of r
     res = np.zeros(N)
     ini = np.random.rand(B)     # First initial conditions
     R = np.linspace(LB, UB, B)  # First searching values of R

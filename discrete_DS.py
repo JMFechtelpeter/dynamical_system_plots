@@ -3,6 +3,8 @@ from numpy.typing import ArrayLike
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+import numba
+from tqdm import tqdm
 
 class MapPlot:
     def __init__(self, recursive_map: Callable, ax: Axes=None, **fig_kwargs):
@@ -161,3 +163,91 @@ class BifurcationPlot(MapPlot):
         traj_endpoints = self.trajectory(X0, T, b)[-1]
         return traj_endpoints
     
+
+class PeriodDoublingBifurcationFinder:
+
+    def __init__(self, recursive_map: Callable, bifurcation_param_limits: tuple):
+        self.map = recursive_map
+        self.bp_lim = list(bifurcation_param_limits)
+        self.bifurcations = []
+
+    @staticmethod
+    @numba.njit('float64[:](float64[:,:])')
+    def log2_number_of_unique_elements(x):
+        ''' Returns the log number of unique elements in each row of arr. '''
+        unique = np.zeros(x.shape[0])
+        for i, el in enumerate(x):
+            unique[i] = np.log2(np.unique(el).size)
+        return unique
+
+    def find_next_bifurcation(self, max_refinement_steps=5):
+
+        n_grid_points = 10                          # Grid size of bifurcation parameter
+        T = 2**25                                   # Iterate map T times to skip transients
+        n_trajectories_per_r_value = 1              # Number of trajectories to calculate per value of bif. parameter
+        round_to_digit = 8                          # Round to this decimal
+        
+        bifurcation_number = len(self.bifurcations)+1  # Number of bifurcations already found
+        n_points = 2**(bifurcation_number+3)         # Number of trailing trajectory points to look at
+        r = np.linspace(*self.bp_lim, n_grid_points).repeat(n_trajectories_per_r_value) # bif. param. values to look at
+        x0 = np.random.rand(n_grid_points * n_trajectories_per_r_value) # First initial conditions
+        x0 = self.map(x0, T, r, n_points)[:,-1]                         # Run trajectories for some time to skip transients
+        
+        current_refinement_step = 0
+        pre_iterations = 0
+        it = 0
+        if bifurcation_number > 7:                   # Later bifurcations need more refinement steps
+            max_refinement_steps += 2        
+
+        pbar = tqdm(total = max_refinement_steps)
+        while current_refinement_step < max_refinement_steps:
+            
+            traj = self.map(x0, T, r, n_points)       # Run trajectories in the current attractor
+            x0 = traj[:,-1]
+            traj = np.round(traj, round_to_digit)             # Round trajectories to equalize very close points
+            log_unique = self.log2_number_of_unique_elements(traj)   # Check how many unique points each trajectory has
+
+            # Handling indices and adjusting ranges
+            try:
+                idx1 = np.where(log_unique == bifurcation_number)[0][-1]     #  find the last trajectory which has i unique points (trajectories are ordered by r!)
+            except IndexError:
+                # Error handling and parameter adjustments
+                pre_iterations += 1
+                print(f'Warning: expected attractor not found for r={r}. '
+                      f'Log number of unique points per trajectory: {log_unique}. '                
+                      f'Number of unsuccessful consecutive iterations: {pre_iterations}. '
+                       'Increasing precision...')
+                if round_to_digit > 15:
+                    # Further adjustments if necessary
+                    idx1 = np.where(log_unique <= bifurcation_number)[0][-1]
+                    idx2 = np.where(log_unique > bifurcation_number)[0][0]
+                    lb = r[idx1]
+                    ub = r[idx2]
+                    r = np.linspace(lb, ub, n_grid_points)
+                else:
+                    round_to_digit = round_to_digit + 1
+                continue
+
+            # Determining lower and upper bounds
+            idx2 = np.where(log_unique >= bifurcation_number + 1)[0][0]        # find the first trajectory which has at least i+1 unique points
+            if log_unique[idx2] > bifurcation_number + 1:  	    # if there the difference in unique points is more than 1, search in that area
+                lb = r[idx1]
+                ub = r[idx2]
+                r = np.linspace(lb, ub, n_grid_points)
+                pre_iterations += 1 
+                print(f'For r={r}, the number of unique points per trajectory is {log_unique}. '
+                      f'Number of unsuccessful consecutive iterations: {pre_iterations}')
+                if pre_iterations > 3:
+                    round_to_digit = round_to_digit + 1
+                continue
+            
+            lb = r[idx1]            # Refine the search space
+            ub = r[idx2]
+            r = np.linspace(lb, ub, n_grid_points)
+            current_refinement_step = current_refinement_step + 1
+            pbar.update(1)
+
+        idx1 = np.where(log_unique == bifurcation_number)[0][-1]
+        idx2 = np.where(log_unique == bifurcation_number + 1)[0][0]
+        self.bp_lim[0] = r[-1]                                              # ???
+        self.bifurcations.append(r[idx1])
